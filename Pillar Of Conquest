@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pillar of Conquest</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#171a20;color:#f2e8d5;font-family:Georgia,serif;text-align:center;padding:14px}
+h1{color:#d9b66f;margin:8px 0}
+p{color:#c8c0b2}
+#status{background:#292e38;padding:12px;border:1px solid #80683f;border-radius:8px;margin:12px auto;max-width:600px}
+.controls{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin:10px}
+button{background:#393d46;color:#fff0d0;border:1px solid #a58a57;padding:10px 13px;border-radius:6px;font-size:15px}
+button.active{background:#94713c;color:white}
+button:disabled{opacity:.35}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:min(94vw,560px);margin:14px auto;border:4px solid #8c7044;aspect-ratio:1}
+.cell{display:flex;align-items:center;justify-content:center;position:relative;font-size:clamp(20px,6vw,38px);border:1px solid #0004;cursor:pointer;min-width:0}
+.light{background:#d6c49c}.dark{background:#756448}
+.cell.selected{outline:4px solid #f4d35e;outline-offset:-4px}
+.cell.target{box-shadow:inset 0 0 0 4px #8ed081}
+#log{max-width:560px;margin:12px auto;text-align:left;background:#292e38;padding:10px;border-radius:7px;min-height:45px;font-size:13px;line-height:1.5}
+#help{max-width:560px;margin:12px auto;color:#c8c0b2;font-size:13px}
+</style>
+</head>
+<body>
+<h1>⚔ PILLAR OF CONQUEST ⚔</h1>
+<p>A medieval tactical battlefield</p>
+<div id="status">Loading battlefield...</div>
+<div class="controls" id="types">
+<button data-type="I" class="active">Infantry ♟</button>
+<button data-type="C">Cavalry ♞</button>
+<button data-type="A">Archer 🏹</button>
+</div>
+<div id="board"></div>
+<div class="controls">
+<button id="cancel">Cancel selection</button>
+<button id="surrender">Surrender</button>
+<button id="restart">Restart game</button>
+</div>
+<div id="log">Battle log: Deployment begins. Player 1 places first.</div>
+<div id="help">Deploy 6 infantry, 2 cavalry and 2 archers in your first two rows, alternating turns. During battle, select a unit, then select a highlighted move or enemy to attack. One action per turn.</div><script>
+const needed={I:6,C:2,A:2};
+const symbols={I:"♟",C:"♞",A:"🏹"};
+let board,phase,player,selected,chosen,placed,finished;
+const $=id=>document.getElementById(id);
+const inside=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
+const own=u=>u&&u.p===player;
+
+function fresh(){
+ board=Array.from({length:8},()=>Array(8).fill(null));
+ phase="deploy";player=1;selected=null;chosen="I";
+ placed={1:{I:0,C:0,A:0},2:{I:0,C:0,A:0}};
+ finished=false;$("types").style.display="flex";
+ say("Deployment begins. Player 1 places first.");render();
+}
+function say(message){
+ $("log").textContent="Battle log: "+message;
+}
+function count(p){
+ return Object.values(placed[p]).reduce((a,b)=>a+b,0);
+}
+function line(r1,c1,r2,c2){
+ let dr=r2-r1,dc=c2-c1;
+ if(dr===0&&dc===0)return null;
+ if(dr===0)return [0,Math.sign(dc),Math.abs(dc)];
+ if(dc===0)return [Math.sign(dr),0,Math.abs(dr)];
+ if(Math.abs(dr)===Math.abs(dc))
+  return [Math.sign(dr),Math.sign(dc),Math.abs(dr)];
+ return null;
+}
+function formation(r,c,p){
+ for(const [dr,dc] of [[0,1],[1,0]]){
+  let n=1;
+  for(const sign of [-1,1]){
+   let rr=r+dr*sign,cc=c+dc*sign;
+   while(inside(rr,cc)&&board[rr][cc]?.p===p&&board[rr][cc]?.t==="I"){
+    n++;rr+=dr*sign;cc+=dc*sign;
+   }
+  }
+  if(n>=3)return true;
+ }
+ return false;
+}
+function archerBlocked(r,c,tr,tc,target){
+ const ln=line(r,c,tr,tc);
+ if(!ln||ln[2]>2)return true;
+ const [dr,dc]=ln;
+ for(let i=1;i<ln[2];i++)
+  if(board[r+dr*i][c+dc*i])return true;
+ if((dr===0||dc===0)&&target.t==="I"&&formation(tr,tc,target.p))
+  return true;
+ return false;
+}
+function legalAttack(r,c,tr,tc,u,v){
+ const ln=line(r,c,tr,tc);
+ if(!ln||v.p===u.p)return false;
+ if(u.t==="I")return ln[2]===1;
+ if(u.t==="A")return ln[2]<=2&&!archerBlocked(r,c,tr,tc,v);
+ if(u.t==="C")return ln[2]<=2;
+ return false;
+}
+function legalMove(r,c,tr,tc,u){
+ const ln=line(r,c,tr,tc);
+ if(!ln||board[tr][tc])return false;
+ const d=ln[2];
+ if(u.t==="I"||u.t==="A")return d===1;
+ if(u.t==="C")return d<=2;
+ return false;
+}function render(){
+ $("status").textContent=finished?"GAME OVER":
+ phase==="deploy"?`DEPLOYMENT — Player ${player}: choose a unit type and place it. (${count(player)}/10 placed)`:
+ `BATTLE — Player ${player}'s turn. ${selected?"Choose a highlighted square.":"Select one of your units."}`;
+
+ document.querySelectorAll("#types button").forEach(b=>{
+  b.classList.toggle("active",b.dataset.type===chosen);
+  b.disabled=phase!=="deploy"||placed[player][b.dataset.type]>=needed[b.dataset.type];
+ });
+
+ const el=$("board");el.innerHTML="";
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  const cell=document.createElement("div");
+  cell.className="cell "+((r+c)%2?"dark":"light");
+  if(selected&&selected.r===r&&selected.c===c)
+   cell.classList.add("selected");
+  const u=board[r][c];
+  if(u)cell.textContent=(u.p===1?"⚫":"⚪")+symbols[u.t];
+  if(selected&&highlight(selected.r,selected.c,r,c))
+   cell.classList.add("target");
+  cell.onclick=()=>tap(r,c);
+  el.appendChild(cell);
+ }
+}
+function highlight(r,c,tr,tc){
+ const u=board[r][c];
+ if(!u||!inside(tr,tc))return false;
+ const v=board[tr][tc];
+ return v?legalAttack(r,c,tr,tc,u,v):legalMove(r,c,tr,tc,u);
+}
+function tap(r,c){
+ if(finished)return;
+
+ if(phase==="deploy"){
+  const rowOK=player===1?(r===0||r===1):(r===6||r===7);
+  if(!rowOK||board[r][c]||placed[player][chosen]>=needed[chosen]){
+   say("Choose an empty square in your own first two rows.");
+   return;
+  }
+  board[r][c]={p:player,t:chosen};
+  placed[player][chosen]++;
+  say(`Player ${player} deployed ${chosen}.`);
+
+  if(count(1)===10&&count(2)===10){
+   phase="battle";player=1;
+   $("types").style.display="none";
+   say("All armies deployed. Player 1 begins.");
+  }else{
+   player=player===1?2:1;
+   const available=Object.keys(needed).find(t=>placed[player][t]<needed[t]);
+   if(available)chosen=available;
+  }
+  render();return;
+ }
+
+ if(!selected){
+  if(own(board[r][c])){
+   selected={r,c};render();
+  }
+  return;
+ }
+
+ const {r:sr,c:sc}=selected,u=board[sr][sc],v=board[r][c];
+
+ if(own(v)){
+  selected={r,c};render();return;
+ }
+
+ if(v){
+  if(!legalAttack(sr,sc,r,c,u,v)){
+   selected=null;
+   say("That attack is blocked or out of range. Turn ends.");
+   next();render();return;
+  }
+
+  if(u.t==="C"&&Math.max(Math.abs(r-sr),Math.abs(c-sc))===2){
+   const ln=line(sr,sc,r,c);
+   const mr=sr+ln[0],mc=sc+ln[1];
+   const blocker=board[mr][mc];
+
+   if(blocker){
+    const options=[];
+    for(let rr=mr-1;rr<=mr+1;rr++)
+     for(let cc=mc-1;cc<=mc+1;cc++)
+      if(inside(rr,cc)&&!(rr===mr&&cc===mc)&&!board[rr][cc]&&!(rr===r&&cc===c))
+       options.push([rr,cc]);
+
+    if(!options.length){
+     selected=null;
+     say("Charge blocked. No legal displacement square. Turn ends.");
+     next();render();return;
+    }
+
+    const choice=prompt("Choose a square for the displaced unit:\n"+
+     options.map((x,i)=>`${i+1}: ${String.fromCharCode(65+x[1])}${x[0]+1}`).join("\n"));
+    const idx=Number(choice)-1;
+
+    if(!Number.isInteger(idx)||idx<0||idx>=options.length){
+     say("Charge cancelled. Your turn is unchanged.");
+     return;
+    }
+
+    const [rr,cc]=options[idx];
+    board[rr][cc]=blocker;
+    board[mr][mc]=null;
+   }
+  }
+
+  if(u.t==="C"){
+   board[r][c]=u;
+   board[sr][sc]=null;
+  }else{
+   board[r][c]=null;
+  }
+
+  say(`Player ${player}'s ${u.t} eliminated an enemy unit.`);
+  selected=null;
+  checkWin();
+  if(!finished)next();
+  render();return;
+ } if(legalMove(sr,sc,r,c,u)){
+  board[r][c]=u;
+  board[sr][sc]=null;
+  selected=null;
+  say(`Player ${player} moved ${u.t}.`);
+  next();render();return;
+ }
+
+ selected=null;
+ say("Selection cleared.");
+ render();
+}
+
+function checkWin(){
+ const p1=board.flat().some(u=>u?.p===1);
+ const p2=board.flat().some(u=>u?.p===2);
+ if(!p1||!p2){
+  finished=true;
+  say(!p1?"Player 2 wins!":"Player 1 wins!");
+ }
+}
+
+function next(){
+ player=player===1?2:1;
+}
+
+$("types").addEventListener("click",e=>{
+ const t=e.target.dataset.type;
+ if(t&&phase==="deploy"&&placed[player][t]<needed[t]){
+  chosen=t;render();
+ }
+});
+
+$("cancel").onclick=()=>{
+ selected=null;render();
+};
+
+$("surrender").onclick=()=>{
+ if(phase==="battle"&&!finished&&confirm(`Player ${player} surrenders?`)){
+  finished=true;
+  say(`Player ${player===1?2:1} wins by surrender!`);
+  render();
+ }
+};
+
+$("restart").onclick=()=>{
+ if(confirm("Restart the entire game?"))fresh();
+};
+
+fresh();
+</script>
+</body>
+</html>
